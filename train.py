@@ -85,7 +85,7 @@ transform = transforms.Compose([transforms.Resize(286, Image.LANCZOS),
 
 bs = 1
 workers = 8
-device = 'cuda:1'
+device = 'cuda:0'
 
 from models import Generator, ResBlock, Discriminator, norm_layer
 
