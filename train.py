@@ -74,7 +74,7 @@ class ImageDataset(Dataset):
         return image
 
 
-transform = transforms.Compose([transforms.Resize(image_size, Image.LANCZOS),
+transform = transforms.Compose([transforms.Resize(286, Image.LANCZOS),
                                 transforms.RandomCrop(image_size),
                                 transforms.RandomHorizontalFlip(p=0.5),
                                 transforms.ToTensor(),
@@ -85,7 +85,7 @@ transform = transforms.Compose([transforms.Resize(image_size, Image.LANCZOS),
 
 bs = 1
 workers = 8
-device = 'cuda:1'
+device = 'cuda:0'
 
 from models import Generator, ResBlock, Discriminator, norm_layer
 
@@ -234,7 +234,7 @@ name = "horse2zebra_256"
 epochs = 100
 decay_epochs = 100
 
-G_A2B, G_B2A, D_A, D_B = load_models(name)
+# G_A2B, G_B2A, D_A, D_B = load_models(name)
 netG_A2B, netG_B2A, netD_A, netD_B = G_A2B, G_B2A, D_A, D_B
 
 # similar optimizer for G and D???
@@ -371,7 +371,7 @@ def training(G_A2B, G_B2A, D_A, D_B, name):
 
             if iters % 100 == 0:
                 print('[%d/%d] Iters: %d | G_A: %.4f | G_B: %.4f | Cycle_A: %.4f | Cycle_B: %.4f | Idt_B2A: %.4f | Idt_A2B: %.4f | Loss_D_A: %.4f | Loss_D_B: %.4f'
-                        % (epoch+1, epochs, iters, Fool_disc_loss_A2B, Fool_disc_loss_B2A,Cycle_loss_A,Cycle_loss_B,Id_loss_B2A,
+                        % (epoch+1, epochs+decay_epochs, iters, Fool_disc_loss_A2B, Fool_disc_loss_B2A,Cycle_loss_A,Cycle_loss_B,Id_loss_B2A,
                             Id_loss_A2B, Disc_loss_A, Disc_loss_B))
             
             if (iters % 100 == 0):

@@ -39,7 +39,8 @@ class ImageDataset(Dataset):
             image = self.transform(image)
         return image
 
-image_size = (256, 256)
+# image_size = (256, 256)
+image_size = (286,286)
 
 transform = transforms.Compose([transforms.Resize(image_size),
                                 transforms.CenterCrop(image_size),
@@ -52,7 +53,7 @@ transform = transforms.Compose([transforms.Resize(image_size),
 
 bs = 4
 workers = 8
-device = 'cuda:1'
+device = 'cuda:0'
 nc = 3
 ndf = 64
 norm_layer = nn.InstanceNorm2d
