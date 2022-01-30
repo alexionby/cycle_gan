@@ -36,6 +36,10 @@ class ResBlock(nn.Module):
 class Generator(nn.Module):
     def __init__(self, f=64, blocks=9):
         super(Generator, self).__init__()
+
+        # pad1 = nn.ReflectionPad2d(3)
+        # enc1 = nn.Conv2d(  3,   f, 7, 1, 0), norm_layer(  f), nn.ReLU(True)
+
         layers = [nn.ReflectionPad2d(3),
                   nn.Conv2d(  3,   f, 7, 1, 0), norm_layer(  f), nn.ReLU(True),
                   nn.Conv2d(  f, 2*f, 3, 2, 1), norm_layer(2*f), nn.ReLU(True),
@@ -76,9 +80,14 @@ class Generator(nn.Module):
                 nn.Tanh()])
 
         self.conv = nn.Sequential(*layers)
+        self.down_x2 = nn.Upsample(size=128)
         
     def forward(self, x):
-        return self.conv(x)
+        
+        out = self.conv(x)
+        out_down_x2 = self.down_x2(out)
+
+        return out, out_down_x2
 
 
 class Discriminator(nn.Module):  
