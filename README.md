@@ -12,3 +12,11 @@ The models are trained with the Adam version of stochastic gradient descent and 
 Use bias = True if InstanceNorm2d, in case of batchNorm2d -> False
 
 Batch Norm + grad accumulation.
+
+#### In case of small Dataset:
+- https://www.kaggle.com/unfriendlyai/diffaugment-is-all-you-need
+
+#### Multi-Disc
+- https://arxiv.org/pdf/1710.06090.pdf
+- https://arxiv.org/pdf/1712.03451.pdf
+- https://arxiv.org/pdf/1907.01424.pdf

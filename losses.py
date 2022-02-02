@@ -2,6 +2,37 @@ import torch
 import torchvision
 
 
+def LSGAN_D(real, fake):
+    return 0.5 * (torch.mean((real - 1)**2) + torch.mean(fake**2))
+
+
+def LSGAN_G(fake):
+    return torch.mean((fake - 1)**2)
+
+
+# Feature matching loss
+def FM_G(a, b):
+    assert len(a) == len(b)
+    loss = 0
+    for i, j in zip(a, b):
+        # loss += torch.mean(torch.abs(i - j))
+        loss += torch.mean((i - j)**2)
+    loss = loss / len(a)
+    return loss
+
+
+# def RaLSGAN_D(fake, real):
+#     loss = (torch.mean((real - torch.mean(fake) - 1) ** 2) +
+#             torch.mean((fake - torch.mean(real) + 1) ** 2))/2
+#     return loss
+
+
+# def RaLSGAN_G(fake, real):
+#     loss = (torch.mean((real - torch.mean(fake) + 1) ** 2) +
+#             torch.mean((fake - torch.mean(real) - 1) ** 2))/2
+#     return loss
+
+
 class VGGPerceptualLoss(torch.nn.Module):
     def __init__(self, resize=True):
         super(VGGPerceptualLoss, self).__init__()

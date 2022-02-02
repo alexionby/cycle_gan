@@ -34,7 +34,7 @@ class ResBlock(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, f=64, blocks=9):
+    def __init__(self, f=64, blocks=9, image_size=256):
         super(Generator, self).__init__()
 
         # pad1 = nn.ReflectionPad2d(3)
@@ -80,39 +80,81 @@ class Generator(nn.Module):
                 nn.Tanh()])
 
         self.conv = nn.Sequential(*layers)
-        self.down_x2 = nn.Upsample(size=128)
+        self.down_x2 = nn.Upsample(size=int(image_size/2))
+        self.down_x4 = nn.Upsample(size=int(image_size/4))
         
     def forward(self, x):
         
         out = self.conv(x)
         out_down_x2 = self.down_x2(out)
+        out_down_x4 = self.down_x4(out)
 
-        return out, out_down_x2
+        return out, out_down_x2, out_down_x4
 
 
 class Discriminator(nn.Module):  
     def __init__(self):
         super(Discriminator, self).__init__()
-        self.main = nn.Sequential(
 
-            nn.Conv2d(nc,ndf,4,2,1),
-            nn.LeakyReLU(0.2, inplace=True),
+        down_blocks = []
 
-            nn.Conv2d(ndf,ndf*2,4,2,1),
-            nn.InstanceNorm2d(ndf * 2),
-            nn.LeakyReLU(0.2, inplace=True),
-
-            nn.Conv2d(ndf*2, ndf * 4, 4, 2, 1),
-            nn.InstanceNorm2d(ndf * 4),
-            nn.LeakyReLU(0.2, inplace=True),
-
-            nn.Conv2d(ndf*4,ndf*8,4,1,1),
-            nn.InstanceNorm2d(ndf*8),
-            nn.LeakyReLU(0.2, inplace=True),
-
-            nn.Conv2d(ndf*8,1,4,1,1)
-            # 128 -> 1 x 14 x 14 / 256 -> 1 x 30 x 30
+        down_blocks.append(
+            DownBlock2d(nc, ndf, 4, 2, 1)
         )
 
-    def forward(self, input):
-        return self.main(input)
+        down_blocks.append(
+            DownBlock2d(ndf, ndf*2, 4, 2, 1, True)
+        )
+
+        down_blocks.append(
+            DownBlock2d(ndf*2, ndf*4, 4, 2, 1, True)
+        )
+
+        down_blocks.append(
+            DownBlock2d(ndf*4, ndf*8, 4, 1, 1, True)
+        )
+
+        self.down_blocks = nn.ModuleList(down_blocks)
+        self.final_conv = nn.Conv2d(ndf*8, out_channels=1, kernel_size=4, stride=1, padding=1)
+        # 128 -> 1 x 14 x 14 / 256 -> 1 x 30 x 30
+
+    def forward(self, x, features=False):
+
+        feature_maps = []
+        out = x
+
+        for down_block in self.down_blocks:
+            feature_maps.append(down_block(out))
+            out = feature_maps[-1]
+
+        prediction_map = self.final_conv(out)
+
+        if features:
+            return prediction_map, feature_maps
+        else:
+            return prediction_map
+
+
+class DownBlock2d(nn.Module):
+
+    def __init__(self, in_features, out_features,
+                 kernel_size=4, stride=1, padding=1, norm=None):
+        super(DownBlock2d, self).__init__()
+        self.conv = nn.Conv2d(in_channels=in_features,
+                              out_channels=out_features,
+                              kernel_size=kernel_size,
+                              stride=stride,
+                              padding=padding)
+
+        if norm:
+            self.norm = nn.InstanceNorm2d(out_features, affine=True)
+        else:
+            self.norm = None
+
+    def forward(self, x):
+        out = x
+        out = self.conv(out)
+        if self.norm:
+            out = self.norm(out)
+        out = F.leaky_relu(out, 0.2)
+        return out
