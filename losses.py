@@ -2,6 +2,10 @@ import torch
 import torchvision
 
 
+# Initialize Loss function
+criterion_Im = torch.nn.L1Loss()
+
+
 def LSGAN_D(real, fake):
     return 0.5 * (torch.mean((real - 1)**2) + torch.mean(fake**2))
 

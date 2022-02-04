@@ -20,3 +20,5 @@ Batch Norm + grad accumulation.
 - https://arxiv.org/pdf/1710.06090.pdf
 - https://arxiv.org/pdf/1712.03451.pdf
 - https://arxiv.org/pdf/1907.01424.pdf
+
+#### How to properly use SyncBatchNorm

@@ -21,59 +21,40 @@ from tensorboardX import SummaryWriter
 
 
 # from losses import VGGPerceptualLoss
-from models import Generator, ResBlock, Discriminator, norm_layer
-from losses import LSGAN_G, LSGAN_D, FM_G
+from models import Discriminator, InceptionGenerator
+from losses import LSGAN_G, LSGAN_D, FM_G, criterion_Im
+from utils import (ReplayBuffer, weights_init,
+                   save_images_test, save_models, load_models)
+from dataloader import get_dataset
+
+
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--local_rank', type=int, default=0)
 
 
 # vgg_loss = VGGPerceptualLoss(resize=False)
 # vgg_loss = vgg_loss.to("cuda")
 
 
-writer = SummaryWriter('train_logs_cuda1')
-
-
-class ReplayBuffer():
-    def __init__(self, max_size=50):
-        assert (max_size > 0), 'Empty buffer or trying to create a black hole. Be careful.'
-        self.max_size = max_size
-        self.data = []
-
-    def push_and_pop(self, data):
-        to_return = []
-        for element in data.data:
-            element = torch.unsqueeze(element, 0)
-            if len(self.data) < self.max_size:
-                self.data.append(element)
-                to_return.append(element)
-            else:
-                if random.uniform(0, 1) > 0.5:
-                    i = random.randint(0, self.max_size-1)
-                    to_return.append(self.data[i].clone())
-                    self.data[i] = element
-                else:
-                    to_return.append(element)
-        return torch.cat(to_return)
+args = parser.parse_args()
 
 
 image_size = (128, 128)
-
-# Buffer size
-buffer_size = 50
-
-# Learning rate for optimizers
+buffer_size = 100
 lr = 0.0002
-
-# Beta1 hyperparam for Adam optimizers
 beta1 = 0.5
-
 epochs = 25
 decay_epochs = 25
 
-bs = 1
+bs = 8
 workers = 8
-device = 'cuda:1'
+# device = 'cuda:1'
 
-name = "smile_256"  # experiment name
+if args.local_rank == 0:
+    writer = SummaryWriter('train_logs_ddp')
+
+name = "smile_inception"  # experiment name
 
 folder = '../../Projects/Meta/smile_ultimate'
 trainA = f'{folder}/trainA'
@@ -82,174 +63,30 @@ testA = f'{folder}/valA'
 testB = f'{folder}/valB'
 
 
-class ImageDataset(Dataset):
-    def __init__(self, img_dir, transform):
-        self.images = glob.glob(f"{img_dir}/*")
-        self.transform = transform
+torch.cuda.set_device(0)
+world_size = 2
 
-    def __len__(self):
-        return len(self.images)
+torch.distributed.init_process_group(
+    'nccl',
+    init_method='env://',
+    world_size=world_size,
+    rank=args.local_rank
+)
 
-    def __getitem__(self, idx):
-        img_path = self.images[idx]
-        pil_image = Image.open(img_path).convert("RGB")
-        image = self.transform(pil_image)
-        image_ = image.unsqueeze(0)
-        image_x2 = F.interpolate(image_, scale_factor=0.5, recompute_scale_factor=True, mode='area')
-        image_x4 = F.interpolate(image_, scale_factor=0.25, recompute_scale_factor=True, mode='area')
-        image_x2 = image_x2.squeeze(0)
-        image_x4 = image_x4.squeeze(0)
-        pil_image.close()
-        return image, image_x2, image_x4
+print(args.local_rank)
 
 
-transform = transforms.Compose([transforms.Resize(image_size, Image.LANCZOS),
-                                transforms.RandomCrop(image_size),
-                                transforms.RandomHorizontalFlip(p=0.5),
-                                transforms.ToTensor(),
-                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                # RandomResizedCrop,
-                                ])
+G_A2B = InceptionGenerator(image_size=image_size[0]) # .to(device)
+G_B2A = InceptionGenerator(image_size=image_size[0])# .to(device)
 
+D_A = Discriminator() #.to(device)
+D_B = Discriminator() #.to(device)
 
-def get_dataloader(dataroot, shuffle):
-    dataset = ImageDataset(dataroot, transform)
-    dataloader = DataLoader(dataset, bs, shuffle,
-                            num_workers=workers)
-    return dataloader
+D_A_x2 = Discriminator() #.to(device)
+D_B_x2 = Discriminator() #.to(device)
 
-
-trainA_gen = get_dataloader(trainA, True)
-trainB_gen = get_dataloader(trainB, True)
-testA_gen = get_dataloader(testA, True)
-testB_gen = get_dataloader(testB, True)
-
-
-# real_batch = next(iter(trainA_gen))
-# print(real_batch.shape, real_batch.min(), real_batch.max())
-# plt.figure(figsize=(12,4))
-# plt.axis("off")
-# plt.title("Training Images")
-# plt.imshow(np.transpose(vutils.make_grid(real_batch.to(device)[:10], padding=2, normalize=True).cpu(),(1,2,0)))
-# plt.show()
-
-# testA_batch = next(iter(testA_gen))
-# print(testA_batch.shape, testA_batch.min(), testA_batch.max())
-# plt.figure(figsize=(12,4))
-# plt.axis("off")
-# plt.title("Training Images")
-# plt.imshow(np.transpose(vutils.make_grid(testA_batch.to(device)[:10], padding=2, normalize=True).cpu(),(1,2,0)))
-# plt.show()
-
-
-def save_models(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, D_A_x4, D_B_x4, name):
-    torch.save(G_A2B, "weights/"+name+"_G_A2B.pt")
-    torch.save(G_B2A, "weights/"+name+"_G_B2A.pt")
-    torch.save(D_A, "weights/"+name+"_D_A.pt")
-    torch.save(D_B, "weights/"+name+"_D_B.pt")
-    torch.save(D_A_x2, "weights/"+name+"_D_A_x2.pt")
-    torch.save(D_B_x2, "weights/"+name+"_D_B_x2.pt")
-    torch.save(D_A_x4, "weights/"+name+"_D_A_x4.pt")
-    torch.save(D_B_x4, "weights/"+name+"_D_B_x4.pt")
-
-
-def load_models(name):
-    G_A2B = torch.load("weights/"+name+"_G_A2B.pt")
-    G_B2A = torch.load("weights/"+name+"_G_B2A.pt")
-    D_A = torch.load("weights/"+name+"_D_A.pt")
-    D_B = torch.load("weights/"+name+"_D_B.pt")
-    return G_A2B, G_B2A, D_A, D_B
-
-
-def save_images_test(genA, genB, epoch):
-    
-    with torch.no_grad():
-
-        batch_a_test, batch_a_test_x2, batch_a_test_x4 = [g.to(device) for g in next(iter(genA))]
-        # real_a_test = batch_a_test.cpu().detach()
-        fake_b_test, fake_b_test_x2, fake_b_test_x4 = G_A2B(batch_a_test)
-        real_a_inv, real_a_inv_x2, real_a_inv_x4 = [b.cpu() for b in G_B2A(fake_b_test)]
-        fake_b_test = fake_b_test.cpu()
-        fake_b_test_x2 = fake_b_test_x2.cpu()
-        batch_a_test = batch_a_test.cpu()
-        batch_a_test_x2 = batch_a_test_x2.cpu()
-
-        # print(batch_a_test.shape)
-        # print(batch_a_test_x2.shape)
-        # print(batch_a_test_x4.shape)
-        # print(fake_b_test.shape)
-        # print(fake_b_test_x2.shape)
-        # print(fake_b_test_x4.shape)
-
-        batch_b_test = next(iter(genB))[0].to(device)
-        # real_b_test = batch_b_test.cpu().detach()
-        fake_a_test = G_B2A(batch_b_test)[0]
-        real_b_inv = G_A2B(fake_a_test)[0].cpu()
-        fake_a_test = fake_a_test.cpu()
-        batch_b_test = batch_b_test.cpu()
-
-        fig, ax = plt.subplots(2, 3, figsize=(10, 10))
-
-        ax[0,0].imshow(np.transpose(vutils.make_grid((batch_a_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        ax[0,0].set_title("Real Image")
-        # ax[0,0].axis('off')
-        ax[0,1].imshow(np.transpose(vutils.make_grid((fake_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        ax[0,1].set_title("Fake Image")
-        # ax[0,1].axis('off')
-        ax[0,2].imshow(np.transpose(vutils.make_grid((real_a_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        ax[0,2].set_title("Inversed Image")
-        # ax[0,2].axis('off')
-
-        ax[1,0].imshow(np.transpose(vutils.make_grid((batch_a_test_x2[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        ax[1,0].set_title("Real Image")
-        # ax[1,0].axis('off')
-        ax[1,1].imshow(np.transpose(vutils.make_grid((fake_b_test_x2[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        ax[1,1].set_title("Fake Image")
-        # ax[1,1].axis('off')
-        ax[1,2].imshow(np.transpose(vutils.make_grid((real_a_inv_x2[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        ax[1,2].set_title("Inversed Image")
-        # ax[1,2].axis('off')
-
-        fig.savefig(f"logs/ep_{epoch}_A->B->A.png")
-        plt.close('all')
-
-        fig, ax = plt.subplots(3, 1, figsize=(10, 10))
-        
-        ax[0].imshow(np.transpose(vutils.make_grid((batch_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        ax[0].set_title("Real Image")
-        ax[0].axis('off')
-        ax[1].imshow(np.transpose(vutils.make_grid((fake_a_test[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        ax[1].set_title("Fake Image")
-        ax[1].axis('off')
-        ax[2].imshow(np.transpose(vutils.make_grid((real_b_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        ax[2].set_title("Inversed Image")
-        ax[2].axis('off')
-
-        fig.savefig(f"logs/ep_{epoch}_B->A->B.png")
-        plt.close('all')
-
-
-G_A2B = Generator(image_size=image_size[0]).to(device)
-G_B2A = Generator(image_size=image_size[0]).to(device)
-
-D_A = Discriminator().to(device)
-D_B = Discriminator().to(device)
-
-D_A_x2 = Discriminator().to(device)
-D_B_x2 = Discriminator().to(device)
-
-D_A_x4 = Discriminator().to(device)
-D_B_x4 = Discriminator().to(device)
-
-
-# custom weights initialization called on netG and netD
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
-        torch.nn.init.normal_(m.weight, 0.0, 0.02)
-    elif classname.find("BatchNorm") != -1:
-        torch.nn.init.normal_(m.weight, 1.0, 0.02)
-        torch.nn.init.zeros_(m.bias)
+D_A_x4 = Discriminator() #.to(device)
+D_B_x4 = Discriminator() #.to(device)
 
 G_A2B.apply(weights_init)
 G_B2A.apply(weights_init)
@@ -261,14 +98,106 @@ D_B_x2.apply(weights_init)
 D_A_x4.apply(weights_init)
 D_B_x4.apply(weights_init)
 
+
+G_A2B = torch.nn.SyncBatchNorm.convert_sync_batchnorm(G_A2B)
+G_B2A = torch.nn.SyncBatchNorm.convert_sync_batchnorm(G_B2A)
+
+D_A = torch.nn.SyncBatchNorm.convert_sync_batchnorm(D_A)
+D_B = torch.nn.SyncBatchNorm.convert_sync_batchnorm(D_B)
+
+device = torch.device('cuda:{}'.format(args.local_rank))
+
+G_A2B = G_A2B.to(device)
+G_B2A = G_B2A.to(device)
+
+D_A = D_A.to(device)
+D_B = D_B.to(device)
+
+G_A2B = torch.nn.parallel.DistributedDataParallel(
+    G_A2B,
+    device_ids=[args.local_rank],
+    output_device=args.local_rank,
+)
+
+G_B2A = torch.nn.parallel.DistributedDataParallel(
+    G_B2A,
+    device_ids=[args.local_rank],
+    output_device=args.local_rank,
+)
+
+D_A = torch.nn.parallel.DistributedDataParallel(
+    D_A,
+    device_ids=[args.local_rank],
+    output_device=args.local_rank,
+)
+
+D_B = torch.nn.parallel.DistributedDataParallel(
+    D_B,
+    device_ids=[args.local_rank],
+    output_device=args.local_rank,
+)
+
+trainA_ds = get_dataset(trainA, image_size)
+trainB_ds = get_dataset(trainB, image_size)
+testA_ds = get_dataset(testA, image_size)
+testB_ds = get_dataset(testB, image_size)
+
+
+sampler_trA = torch.utils.data.distributed.DistributedSampler(
+    trainA_ds,
+    num_replicas=2,
+    rank=args.local_rank,
+)
+
+trainA_gen = DataLoader(trainA_ds, bs,
+                        pin_memory=True,
+                        sampler=sampler_trA,
+                        drop_last=True,
+                        num_workers=workers)
+
+
+sampler_trB = torch.utils.data.distributed.DistributedSampler(
+    trainB_ds,
+    num_replicas=2,
+    rank=args.local_rank,
+)
+
+trainB_gen = DataLoader(trainB_ds, bs,
+                        pin_memory=True,
+                        sampler=sampler_trB,
+                        drop_last=True,
+                        num_workers=workers)
+
+sampler_teA = torch.utils.data.distributed.DistributedSampler(
+    testA_ds,
+    num_replicas=2,
+    rank=args.local_rank,
+)
+
+testA_gen = DataLoader(testA_ds, bs, 
+                        pin_memory=True,
+                        sampler=sampler_teA,
+                        drop_last=True,
+                        num_workers=workers)
+
+sampler_teB = torch.utils.data.distributed.DistributedSampler(
+    testB_ds,
+    num_replicas=2,
+    rank=args.local_rank,
+)
+
+testB_gen = DataLoader(testB_ds, bs, 
+                        pin_memory=True,
+                        sampler=sampler_teA,
+                        drop_last=True,
+                        num_workers=workers)
+
+
 # print("Generator summary: ")
 # print(summary(G_A2B, (3, *image_size), device='cuda'))
 
 # print("Discriminator summary: ")
 # print(summary(D_A, (3, *image_size), device='cuda'))
-
-# Initialize Loss function
-criterion_Im = torch.nn.L1Loss()
 
 # G_A2B, G_B2A, D_A, D_B = load_models(name)
 
@@ -288,6 +217,7 @@ optimizer_D_A_x4 = torch.optim.Adam(D_A_x4.parameters(), lr=lr, betas=(beta1, 0.
 optimizer_D_B_x4 = torch.optim.Adam(D_B_x4.parameters(), lr=lr, betas=(beta1, 0.999))
 
 
+
 def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
 
     if 'logs' not in os.listdir():
@@ -296,14 +226,14 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
     # Training Loop
     iters = 0
 
-    fake_A_buffer = ReplayBuffer()
-    fake_B_buffer = ReplayBuffer()
+    fake_A_buffer = ReplayBuffer(max_size=buffer_size)
+    fake_B_buffer = ReplayBuffer(max_size=buffer_size)
 
-    fake_A_buffer_x2 = ReplayBuffer()
-    fake_B_buffer_x2 = ReplayBuffer()
+    fake_A_buffer_x2 = ReplayBuffer(max_size=buffer_size)
+    fake_B_buffer_x2 = ReplayBuffer(max_size=buffer_size)
 
-    fake_A_buffer_x4 = ReplayBuffer()
-    fake_B_buffer_x4 = ReplayBuffer()
+    fake_A_buffer_x4 = ReplayBuffer(max_size=buffer_size)
+    fake_B_buffer_x4 = ReplayBuffer(max_size=buffer_size)
 
     lr_decay_epochs = np.linspace(lr, 0, decay_epochs)
 
@@ -323,7 +253,7 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
 
         # For each batch in the dataloader
         for i, (data_horse, data_zebra) in enumerate(zip(trainA_gen, trainB_gen), 0):
-            
+
             # set model input
             a_real, a_real_x2, a_real_x4 = [d.to(device) for d in data_horse]
             b_real, b_real_x2, b_real_x4 = [d.to(device) for d in data_zebra]
@@ -352,51 +282,42 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
 
             # print([d.shape for d in da_feat], [d.shape for d in da_feat_real])
             
-            db_fake_x2, db_feat_x2 = D_B_x2(b_fake_x2, True)
-            _, db_feat_real_x2 = D_B_x2(b_real_x2, True)
+            # db_fake_x2, db_feat_x2 = D_B_x2(b_fake_x2, True)
+            # _, db_feat_real_x2 = D_B_x2(b_real_x2, True)
 
-            da_fake_x2, da_feat_x2 = D_A_x2(a_fake_x2, True)
-            _, da_feat_real_x2 = D_A_x2(a_real_x2, True)
+            # da_fake_x2, da_feat_x2 = D_A_x2(a_fake_x2, True)
+            # _, da_feat_real_x2 = D_A_x2(a_real_x2, True)
 
             # print('Real: ', b_real_x2.shape, b_fake_x2.shape)
             # print([d.shape for d in da_feat_x2], [d.shape for d in da_feat_real_x2])
 
-            db_fake_x4, db_feat_x4 = D_B_x4(b_fake_x4, True)
-            _, db_feat_real_x4 = D_B_x4(b_real_x4, True)
+            # db_fake_x4, db_feat_x4 = D_B_x4(b_fake_x4, True)
+            # _, db_feat_real_x4 = D_B_x4(b_real_x4, True)
 
-            da_fake_x4, da_feat_x4 = D_A_x4(a_fake_x4, True)
-            _, da_feat_real_x4 = D_A_x4(a_real_x4, True)
+            # da_fake_x4, da_feat_x4 = D_A_x4(a_fake_x4, True)
+            # _, da_feat_real_x4 = D_A_x4(a_real_x4, True)
 
             # FM for A2B
-            FM_A2B_loss = 0
-            for a, b in [(db_feat, db_feat_real),
-                         (db_feat_x2, db_feat_real_x2),
-                         (db_feat_x4, db_feat_real_x4)]:
-                FM_A2B_loss += FM_G(a, b)
+            # FM_A2B_loss = 0
+            # for a, b in [(db_feat, db_feat_real),
+            #              (db_feat_x2, db_feat_real_x2),
+            #              (db_feat_x4, db_feat_real_x4)]:
+            #     FM_A2B_loss += FM_G(a, b)
 
             # FM for B2A
-            FM_B2A_loss = 0
-            for a, b in [(da_feat, da_feat_real),
-                         (da_feat_x2, da_feat_real_x2),
-                         (da_feat_x4, da_feat_real_x4)]:
-                FM_B2A_loss += FM_G(a, b)
-
-            # print(db_feat)
-            # for i,d in enumerate(db_feat):
-            #     print('Layer #', i, d.shape)
-            # # print(db_feat.shape)
-            # print(db_fake.shape, db_fake_x2.shape, db_fake_x4.shape)
+            # FM_B2A_loss = 0
+            # for a, b in [(da_feat, da_feat_real),
+            #              (da_feat_x2, da_feat_real_x2),
+            #              (da_feat_x4, da_feat_real_x4)]:
+            #     FM_B2A_loss += FM_G(a, b)
 
             Gen_loss_A2B = LSGAN_G(db_fake)
             Gen_loss_B2A = LSGAN_G(da_fake)
 
-            Gen_loss_A2B_x2 = LSGAN_G(db_fake_x2)
-            Gen_loss_B2A_x2 = LSGAN_G(da_fake_x2)
-            Gen_loss_A2B_x4 = LSGAN_G(db_fake_x4)
-            Gen_loss_B2A_x4 = LSGAN_G(da_fake_x4)
-
-            # Fool_disc_loss_A2B = RaLSGAN_G(D_B(b_fake), D_B(b_real))
-            # Fool_disc_loss_B2A = RaLSGAN_G(D_A(a_fake), D_A(a_real))
+            # Gen_loss_A2B_x2 = LSGAN_G(db_fake_x2)
+            # Gen_loss_B2A_x2 = LSGAN_G(da_fake_x2)
+            # Gen_loss_A2B_x4 = LSGAN_G(db_fake_x4)
+            # Gen_loss_B2A_x4 = LSGAN_G(da_fake_x4)
 
             lambda_A = 10
             lambda_B = 10
@@ -416,10 +337,10 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
 
             # generator losses
             Loss_G = Gen_loss_A2B + Gen_loss_B2A
-            Loss_G = Loss_G + Gen_loss_A2B_x2 + Gen_loss_B2A_x2
-            Loss_G = Loss_G + Gen_loss_A2B_x4 + Gen_loss_B2A_x4
-            Loss_G = Loss_G / 3.0
-            Loss_G = Loss_G + FM_A2B_loss + FM_B2A_loss
+            # Loss_G = Loss_G + Gen_loss_A2B_x2 + Gen_loss_B2A_x2
+            # Loss_G = Loss_G + Gen_loss_A2B_x4 + Gen_loss_B2A_x4
+            # Loss_G = Loss_G / 3.0
+            # Loss_G = Loss_G + FM_A2B_loss + FM_B2A_loss
             Loss_G = Loss_G + Cycle_loss_A + Cycle_loss_B
             Loss_G = Loss_G + Id_loss_A2B + Id_loss_B2A
             # Loss_G = Loss_G + VGG_A + VGG_B
@@ -456,74 +377,71 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
 
             # Discriminator A
             optimizer_D_A.zero_grad()
-            optimizer_D_A_x2.zero_grad()
-            optimizer_D_A_x4.zero_grad()
+            # optimizer_D_A_x2.zero_grad()
+            # optimizer_D_A_x4.zero_grad()
 
             buffer_a_fake = fake_A_buffer.push_and_pop(a_fake)
-            buffer_a_fake_x2 = fake_A_buffer_x2.push_and_pop(a_fake_x2)
-            buffer_a_fake_x4 = fake_A_buffer_x4.push_and_pop(a_fake_x4)
+            # buffer_a_fake_x2 = fake_A_buffer_x2.push_and_pop(a_fake_x2)
+            # buffer_a_fake_x4 = fake_A_buffer_x4.push_and_pop(a_fake_x4)
 
             Disc_loss_A = LSGAN_D(D_A(a_real), D_A(buffer_a_fake.detach()))
-            Disc_loss_A_x2 = LSGAN_D(D_A_x2(a_real_x2), D_A_x2(buffer_a_fake_x2.detach()))
-            Disc_loss_A_x4 = LSGAN_D(D_A_x4(a_real_x4), D_A_x4(buffer_a_fake_x4.detach()))
-            # Disc_loss_A = RaLSGAN_D(D_A(a_real), D_A(buffer_a_fake.detach()))
+            # Disc_loss_A_x2 = LSGAN_D(D_A_x2(a_real_x2), D_A_x2(buffer_a_fake_x2.detach()))
+            # Disc_loss_A_x4 = LSGAN_D(D_A_x4(a_real_x4), D_A_x4(buffer_a_fake_x4.detach()))
 
             Disc_loss_A.backward()
             optimizer_D_A.step()
-            Disc_loss_A_x2.backward()
-            optimizer_D_A_x2.step()
-            Disc_loss_A_x4.backward()
-            optimizer_D_A_x4.step()
+            # Disc_loss_A_x2.backward()
+            # optimizer_D_A_x2.step()
+            # Disc_loss_A_x4.backward()
+            # optimizer_D_A_x4.step()
 
             # Discriminator B
             optimizer_D_B.zero_grad()
-            optimizer_D_B_x2.zero_grad()
-            optimizer_D_B_x4.zero_grad()
+            # optimizer_D_B_x2.zero_grad()
+            # optimizer_D_B_x4.zero_grad()
 
             buffer_b_fake = fake_B_buffer.push_and_pop(b_fake)
-            buffer_b_fake_x2 = fake_B_buffer_x2.push_and_pop(b_fake_x2)
-            buffer_b_fake_x4 = fake_B_buffer_x4.push_and_pop(b_fake_x4)
+            # buffer_b_fake_x2 = fake_B_buffer_x2.push_and_pop(b_fake_x2)
+            # buffer_b_fake_x4 = fake_B_buffer_x4.push_and_pop(b_fake_x4)
 
             Disc_loss_B = LSGAN_D(D_B(b_real), D_B(buffer_b_fake.detach()))
-            Disc_loss_B_x2 = LSGAN_D(D_B_x2(b_real_x2), D_B_x2(buffer_b_fake_x2.detach()))
-            Disc_loss_B_x4 = LSGAN_D(D_B_x4(b_real_x4), D_B_x4(buffer_b_fake_x4.detach()))
-            # Disc_loss_B = RaLSGAN_D(D_B(b_real), D_B(buffer_b_fake.detach()))
+            # Disc_loss_B_x2 = LSGAN_D(D_B_x2(b_real_x2), D_B_x2(buffer_b_fake_x2.detach()))
+            # Disc_loss_B_x4 = LSGAN_D(D_B_x4(b_real_x4), D_B_x4(buffer_b_fake_x4.detach()))
 
             Disc_loss_B.backward()
             optimizer_D_B.step()
-            Disc_loss_B_x2.backward()
-            optimizer_D_B_x2.step()
-            Disc_loss_B_x4.backward()
-            optimizer_D_B_x4.step()
+            # Disc_loss_B_x2.backward()
+            # optimizer_D_B_x2.step()
+            # Disc_loss_B_x4.backward()
+            # optimizer_D_B_x4.step()
 
-            writer.add_scalars("Gen/Loss",
-                               {"A": Gen_loss_A2B,
-                                "B": Gen_loss_B2A,
-                                "Ax2": Gen_loss_A2B_x2,
-                                "Bx2": Gen_loss_B2A_x2,
-                                "Ax4": Gen_loss_A2B_x4,
-                                "Bx4": Gen_loss_B2A_x4},
-                               iters)
+            if args.local_rank == 0:
 
-            writer.add_scalars("Disc/Loss",
-                               {"A": Disc_loss_A,
-                                "B": Disc_loss_B,
-                                "Ax2": Disc_loss_A_x2,
-                                "Bx2": Disc_loss_B_x2,
-                                "Ax4": Disc_loss_A_x4,
-                                "Bx4": Disc_loss_B_x4},
-                               iters)
+                writer.add_scalars("Gen/Loss",
+                                {"A": Gen_loss_A2B,
+                                    "B": Gen_loss_B2A},
+                                    # "Ax2": Gen_loss_A2B_x2,
+                                    # "Bx2": Gen_loss_B2A_x2,
+                                    # "Ax4": Gen_loss_A2B_x4,
+                                    # "Bx4": Gen_loss_B2A_x4},
+                                iters)
 
-            writer.add_scalar('FM/A2B', FM_A2B_loss, iters)
-            writer.add_scalar('FM/B2A', FM_B2A_loss, iters)
+                writer.add_scalars("Disc/Loss",
+                                {"A": Disc_loss_A,
+                                    "B": Disc_loss_B},
+                                    # "Ax2": Disc_loss_A_x2,
+                                    # "Bx2": Disc_loss_B_x2,
+                                    # "Ax4": Disc_loss_A_x4,
+                                    # "Bx4": Disc_loss_B_x4},
+                                iters)
 
-            writer.add_scalar('Cycle/Cycle_A->B->A_loss', Cycle_loss_A, iters)
-            writer.add_scalar('Cycle/Cycle_B->A->B_loss', Cycle_loss_B, iters)
-            writer.add_scalar('Idt/Identity_A2B_L1', Id_loss_A2B, iters)
-            writer.add_scalar('Idt/Identity_B2A_L1', Id_loss_B2A, iters)
+                # writer.add_scalar('FM/A2B', FM_A2B_loss, iters)
+                # writer.add_scalar('FM/B2A', FM_B2A_loss, iters)
 
-            # del data_zebra, data_horse, a_real, b_real, a_fake, b_fake
-            # del buffer_a_fake, buffer_b_fake
+                writer.add_scalar('Cycle/Cycle_A->B->A_loss', Cycle_loss_A, iters)
+                writer.add_scalar('Cycle/Cycle_B->A->B_loss', Cycle_loss_B, iters)
+                writer.add_scalar('Idt/Identity_A2B_L1', Id_loss_A2B, iters)
+                writer.add_scalar('Idt/Identity_B2A_L1', Id_loss_B2A, iters)
 
             if iters % 100 == 0:
                 print('[%d/%d] Iters: %d | G_A: %.4f | G_B: %.4f | Cycle_A: %.4f | Cycle_B: %.4f | Idt_B2A: %.4f | Idt_A2B: %.4f | Loss_D_A: %.4f | Loss_D_B: %.4f'
@@ -531,12 +449,19 @@ def training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
                             Id_loss_A2B, Disc_loss_A, Disc_loss_B))
 
             if (iters % 100 == 0):
-                save_images_test(testA_gen, testB_gen, epoch)
+                if args.local_rank == 0:
+                    pass
+                    # save_images_test(testA_gen, testB_gen, G_A2B, G_B2A, epoch, device)
 
             iters += 1
 
-        save_models(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, D_A_x4, D_B_x4, name)
+        if args.local_rank == 0:
+            print('Saving_models! Epoch: ', epoch)
+            save_models(G_A2B, G_B2A, D_A, D_B, name)
+
+        # save_models(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, D_A_x4, D_B_x4, name)
 
 
 losses = training(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name)
-writer.close()
+if args.local_rank == 0:
+    writer.close()

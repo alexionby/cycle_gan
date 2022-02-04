@@ -4,19 +4,166 @@ import torch.nn.functional as F
 
 nc = 3
 ndf = 64
-norm_layer = nn.InstanceNorm2d
+norm_layer = nn.BatchNorm2d
 
 
-# class ResBlock(nn.Module):
-#     def __init__(self, f):
-#         super(ResBlock, self).__init__()
-#         self.conv = nn.Sequential(nn.Conv2d(f, f, 3, 1, 1), norm_layer(f),
-#                                   nn.ReLU(True),
-#                                   nn.Conv2d(f, f, 3, 1, 1))
-#         self.norm = norm_layer(f)
+class ConvNormRelu(nn.Module):
+    def __init__(self, inf, onf, ks=3, stride=1, padding=1):
+        super(ConvNormRelu, self).__init__()
+        self.conv = nn.Sequential(nn.Conv2d(inf, onf,
+                                            kernel_size=ks,
+                                            stride=stride,
+                                            padding=padding),
+                                  norm_layer(onf),
+                                  nn.ReLU(True))
 
-#     def forward(self, x):
-#         return F.relu(self.norm(self.conv(x)+x))
+    def forward(self, x):
+        return self.conv(x)
+
+
+class ConvTpNormRelu(nn.Module):
+    def __init__(self, inf, onf, ks=3, stride=1, padding=1, output_padding=1):
+        super(ConvTpNormRelu, self).__init__()
+        self.conv = nn.Sequential(nn.ConvTranspose2d(inf, onf, ks,
+                                                     stride=stride,
+                                                     padding=padding,
+                                                     output_padding=output_padding),
+                                  norm_layer(onf),
+                                  nn.ReLU(True))
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class UpConvNormRelu(nn.Module):
+    def __init__(self, inf, onf, ks=3, scale=2, padding=1, output_padding=1):
+        super(UpConvNormRelu, self).__init__()
+        self.conv = nn.Sequential(nn.Upsample(scale_factor=scale, mode='nearest'),
+                                  nn.Conv2d(inf, onf, ks, stride=1,
+                                            padding=padding),
+                                  norm_layer(onf),
+                                  nn.ReLU(True))
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class DepthBlock(nn.Module):
+    def __init__(self, nf, kernel, reduction):
+        super(DepthBlock, self).__init__()
+        pad = int((kernel - 1) // 2)
+        rnf = int(nf // reduction)
+
+        block = [nn.Conv2d(nf, rnf, 1, 1, padding=0),
+                norm_layer(rnf),
+                nn.ReLU(True),
+                nn.Conv2d(rnf, rnf, kernel, 1, padding=pad, groups=rnf),
+                norm_layer(rnf),
+                nn.ReLU(True),
+                nn.Conv2d(rnf, nf, 1, 1, padding=0)]
+
+        self.block = nn.Sequential(*block)
+
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, nf, kernel, reduction):
+        super(ResidualBlock, self).__init__()
+        pad = int((kernel - 1) // 2)
+        rnf = int(nf // reduction)
+
+        block = [nn.Conv2d(nf, rnf, kernel, 1, padding=pad),
+                norm_layer(rnf),
+                nn.ReLU(True),
+                nn.Conv2d(rnf, nf, kernel, 1, padding=pad)]
+
+        self.block = nn.Sequential(*block)
+
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class InceptionBlock(nn.Module):
+    def __init__(self, nf,
+                 dw_kernels=[1, 3, 5],
+                 resnet_kernels=[1, 3, 5],
+                 reduction=4):
+        super(InceptionBlock, self).__init__()
+
+        dw_blocks = []
+        for kernel in dw_kernels:
+            dw_blocks += [DepthBlock(nf, kernel, reduction)]
+
+        res_blocks = []
+        for kernel in resnet_kernels:
+            res_blocks += [ResidualBlock(nf, kernel, reduction)]
+
+        self.res_blocks = nn.Sequential(*res_blocks)
+        self.dw_blocks = nn.Sequential(*dw_blocks)
+        self.last_conv = nn.Conv2d(nf, nf, 1)
+        self.norm = norm_layer(nf)
+
+    def forward(self, x):
+        tmp = sum([op(x) for op in self.dw_blocks]) + sum([op(x) for op in self.res_blocks])
+        tmp = self.last_conv(tmp)
+        tmp = x + self.norm(tmp)
+        return tmp
+
+
+class InceptionGenerator(nn.Module):
+    def __init__(self, nf=64,
+                 blocks=9,
+                 num_down=2,
+                 image_size=256,
+                 reduction=6):
+        super(InceptionGenerator, self).__init__()
+
+        downsample = []
+
+        # downsample.append(nn.ReflectionPad2d(3))
+        downsample.append(ConvNormRelu(3, nf, 7, 1, 3))
+
+        for i in range(0, num_down):
+            imult = 2**i
+            omult = 2**(i+1)
+            downsample.append(ConvNormRelu(imult * nf, omult * nf, 3, 2, 1))
+
+        features = []
+        for i in range(blocks):
+            fnf = (2**num_down) * nf
+            features += [InceptionBlock(fnf, reduction=reduction)]
+
+        upsample = []
+        for i in range(0, num_down)[::-1]:
+            omult = 2**i
+            imult = 2**(i+1)
+            upsample.append(UpConvNormRelu(imult * nf, omult * nf, 3,
+                                           scale=2,
+                                           padding=1,
+                                           output_padding=1))
+
+        # upsample.append(nn.ReflectionPad2d(3))
+        upsample.append(nn.Conv2d(nf, 3, 7, 1, 3))
+        upsample.append(nn.Tanh())
+
+        self.down = nn.Sequential(*downsample)
+        self.features = nn.Sequential(*features)
+        self.up = nn.Sequential(*upsample)
+
+        self.down_x2 = nn.Upsample(size=int(image_size/2))
+        self.down_x4 = nn.Upsample(size=int(image_size/4))
+
+    def forward(self, x):
+        out = self.down(x)
+        out = self.features(out)
+        out = self.up(out)
+        out_down_x2 = self.down_x2(out)
+        out_down_x4 = self.down_x4(out)
+        return out, out_down_x2, out_down_x4
 
 
 class ResBlock(nn.Module):
@@ -99,7 +246,7 @@ class Discriminator(nn.Module):
         down_blocks = []
 
         down_blocks.append(
-            DownBlock2d(nc, ndf, 4, 2, 1)
+            DownBlock2d(nc, ndf, 4, 2, 1, False)
         )
 
         down_blocks.append(
@@ -158,3 +305,14 @@ class DownBlock2d(nn.Module):
             out = self.norm(out)
         out = F.leaky_relu(out, 0.2)
         return out
+
+
+if __name__ == "__main__":
+
+    model = InceptionGenerator(64, reduction=8)
+    print(model)
+
+    rand = torch.FloatTensor(1, 3, 256, 256)
+    out = model(rand)
+
+    torch.onnx.export(model, rand, "model.onnx", opset_version=9)
