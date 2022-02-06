@@ -16,9 +16,9 @@ import torchvision.utils as vutils
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
-import matplotlib.pylab as plt
-import ipywidgets
-from IPython import display
+# import matplotlib.pylab as plt
+# import ipywidgets
+# from IPython import display
 from torchsummary import summary
 from models import InceptionGenerator
 
@@ -41,8 +41,8 @@ class ImageDataset(Dataset):
 # image_size = (256, 256)
 image_size = (128, 128)
 
-transform = transforms.Compose([transforms.Resize(image_size),
-                                transforms.CenterCrop(image_size),
+transform = transforms.Compose([transforms.Resize(image_size, Image.LANCZOS),
+                                # transforms.CenterCrop(image_size),
                                 transforms.ToTensor(),
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                 # transforms.RandomHorizontalFlip(p=0.5),
@@ -76,25 +76,27 @@ testA_gen = get_dataloader(testA, False)
 testB_gen = get_dataloader(testB, False)
 
 
-def load_models(name):
-    G_A2B = InceptionGenerator(image_size=128)
-    G_A2B.load_state_dict(torch.load("weights/"+name+"_G_A2B.pth", map_location=device))
-    # G_A2B.load_state_dict(torch.load("weights.pth", map_location=device))
+def load_models(name, image_size):
+    G_A2B = InceptionGenerator(image_size=image_size)
+    G_A2B.load_state_dict(torch.load("weights/"+name+"_G_A2B.pth")) # , map_location=device))
 
-    G_B2A = InceptionGenerator(image_size=128)
-    G_B2A.load_state_dict(torch.load("weights/"+name+"_G_B2A.pth", map_location=device), strict=False)
+    G_B2A = InceptionGenerator(image_size=image_size)
+    G_B2A.load_state_dict(torch.load("weights/"+name+"_G_B2A.pth")) #, map_location=device), strict=False)
     return G_A2B, G_B2A
 
 # name = "horse2zebra_256"
 name = "smile_inception"
 
-G_A2B, G_B2A = load_models(name)
+G_A2B, G_B2A = load_models(name, image_size[0])
 
 G_A2B = G_A2B.to(device)
 G_B2A = G_B2A.to(device)
 
-G_A2B.eval()
-G_B2A.eval()
+# G_A2B.eval()
+# G_B2A.eval()
+
+G_A2B.train()
+G_B2A.train()
 
 try:
     os.mkdir(f"result/{name}")
@@ -137,21 +139,23 @@ for i, (data_A, data_B) in enumerate(zip(testA_gen, testB_gen), 0):
     a_real = data_A.to(device)
     b_real = data_B.to(device)
 
+    # print(a_real.shape, a_real.max(), a_real.min())
+
     with torch.no_grad():
         b_fake, _, _ = G_A2B(a_real)
         a_rec, _, _ = G_B2A(b_fake)
         a_fake, _, _ = G_B2A(b_real)
         b_rec, _, _ = G_A2B(a_fake)
 
-    for j in range(a_real.shape[0]):
-        idx = i*bs + j
-        save_results(a_real[j], b_fake[j], a_rec[j], name, "A", idx)
-        save_results(b_real[j], a_fake[j], b_rec[j], name, "B", idx)
+        for j in range(a_real.shape[0]):
+            idx = i*bs + j
+            save_results(a_real[j], b_fake[j], a_rec[j], name, "A", idx)
+            save_results(b_real[j], a_fake[j], b_rec[j], name, "B", idx)
 
 # Input to the model
-# x = torch.randn(1, 3, 256, 256, requires_grad=True)
-# x = x.to(device)
-# torch_out = G_A2B(x)
+x = torch.randn(1, 3, *image_size, requires_grad=True)
+x = x.to(device)
+torch_out = G_A2B(x)
 
-# # Export the model
-# torch.onnx.export(G_A2B,x,"h2z.onnx", opset_version=10)
+# Export the model
+torch.onnx.export(G_A2B,x,"h2z.onnx", opset_version=11)

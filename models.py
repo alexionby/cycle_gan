@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 nc = 3
 ndf = 64
-norm_layer = nn.BatchNorm2d
+norm_layer = nn.InstanceNorm2d
 
 
 class ConvNormRelu(nn.Module):
@@ -14,7 +14,7 @@ class ConvNormRelu(nn.Module):
                                             kernel_size=ks,
                                             stride=stride,
                                             padding=padding),
-                                  norm_layer(onf),
+                                  norm_layer(onf, ),
                                   nn.ReLU(True))
 
     def forward(self, x):
@@ -111,6 +111,7 @@ class InceptionBlock(nn.Module):
         tmp = sum([op(x) for op in self.dw_blocks]) + sum([op(x) for op in self.res_blocks])
         tmp = self.last_conv(tmp)
         tmp = x + self.norm(tmp)
+        # print(self.norm.running_mean)
         return tmp
 
 
@@ -151,16 +152,41 @@ class InceptionGenerator(nn.Module):
         upsample.append(nn.Tanh())
 
         self.down = nn.Sequential(*downsample)
+        self.d1 = self.down[0]
+        self.d2 = self.down[1]
+        self.d3 = self.down[2]
+
         self.features = nn.Sequential(*features)
+
         self.up = nn.Sequential(*upsample)
+        self.up3 = self.up[0]
+        self.up2 = self.up[1]
+        self.up1 = self.up[2]
 
         self.down_x2 = nn.Upsample(size=int(image_size/2))
         self.down_x4 = nn.Upsample(size=int(image_size/4))
 
     def forward(self, x):
+
+        # d1 = self.d1(x)
+        # d2 = self.d2(d1)
+        # d3 = self.d3(d2)
+
+        # feat = self.features(d3)
+        # feat = torch.cat((feat,d3), dim=1)
+
+        # u3 = self.up3(feat)
+        # u3 = torch.cat((u3,d2), dim=1)
+
+        # u2 = self.up2(u3)
+        # u2 = torch.cat((u2,d1), dim=1) # possibly add x
+
+        # out = self.up1(u2)
+
         out = self.down(x)
         out = self.features(out)
         out = self.up(out)
+
         out_down_x2 = self.down_x2(out)
         out_down_x4 = self.down_x4(out)
         return out, out_down_x2, out_down_x4
@@ -309,8 +335,8 @@ class DownBlock2d(nn.Module):
 
 if __name__ == "__main__":
 
-    model = InceptionGenerator(64, reduction=8)
-    print(model)
+    model = InceptionGenerator(32, reduction=4)
+    # print(model)
 
     rand = torch.FloatTensor(1, 3, 256, 256)
     out = model(rand)

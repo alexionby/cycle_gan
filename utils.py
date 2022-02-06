@@ -68,64 +68,100 @@ def weights_init(m):
 
 
 def save_images_test(genA, genB, Gan_A2B, Gan_B2A, epoch, device):
-    
+
+    Gan_A2B.eval()
+    Gan_B2A.eval()
+
     with torch.no_grad():
-        pass
+
 
         batch_a_test, batch_a_test_x2, batch_a_test_x4 = [g.to(device) for g in next(iter(genA))]
         fake_b_test, fake_b_test_x2, fake_b_test_x4 = Gan_A2B(batch_a_test)
-        # real_a_inv, real_a_inv_x2, real_a_inv_x4 = [b.cpu() for b in Gan_B2A(fake_b_test)]
-        # fake_b_test = fake_b_test.cpu()
-        # fake_b_test_x2 = fake_b_test_x2.cpu()
-        # batch_a_test = batch_a_test.cpu()
-        # batch_a_test_x2 = batch_a_test_x2.cpu()
+        real_a_inv, real_a_inv_x2, real_a_inv_x4 = [b.cpu() for b in Gan_B2A(fake_b_test)]
+        fake_b_test = fake_b_test.cpu()
+        fake_b_test_x2 = fake_b_test_x2.cpu()
+        batch_a_test = batch_a_test.cpu()
+        batch_a_test_x2 = batch_a_test_x2.cpu()
 
-        # print(batch_a_test.shape)
-        # print(batch_a_test_x2.shape)
-        # print(batch_a_test_x4.shape)
-        # print(fake_b_test.shape)
-        # print(fake_b_test_x2.shape)
-        # print(fake_b_test_x4.shape)
+        batch_b_test = next(iter(genB))[0].to(device)
+        fake_a_test = Gan_B2A(batch_b_test)[0]
+        real_b_inv = Gan_A2B(fake_a_test)[0].cpu()
+        fake_a_test = fake_a_test.cpu()
+        batch_b_test = batch_b_test.cpu()
 
-        # batch_b_test = next(iter(genB))[0].to(device)
-        # # real_b_test = batch_b_test.cpu().detach()
-        # fake_a_test = Gan_B2A(batch_b_test)[0]
-        # real_b_inv = Gan_A2B(fake_a_test)[0].cpu()
-        # fake_a_test = fake_a_test.cpu()
-        # batch_b_test = batch_b_test.cpu()
-
-        # fig, ax = plt.subplots(3, 1, figsize=(10, 10))
-
-        # ax[0].imshow(np.transpose(vutils.make_grid((batch_a_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        # ax[0].set_title("Real Image")
+        fig, ax = plt.subplots(3, 1, figsize=(10, 10))
+        ax[0].imshow(np.transpose(vutils.make_grid((batch_a_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[0].set_title("Real Image")
         # ax[0].axis('off')
-        # ax[1].imshow(np.transpose(vutils.make_grid((fake_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        # ax[1].set_title("Fake Image")
+        ax[1].imshow(np.transpose(vutils.make_grid((fake_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[1].set_title("Fake Image")
         # ax[1].axis('off')
-        # ax[2].imshow(np.transpose(vutils.make_grid((real_a_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        # ax[2].set_title("Inversed Image")
+        ax[2].imshow(np.transpose(vutils.make_grid((real_a_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[2].set_title("Inversed Image")
         # ax[2].axis('off')
-        # plt.tight_layout()
+        plt.tight_layout()
+        fig.savefig(f"logs/ep_{epoch}_A->B->A_eval.png")
+        plt.close('all')
 
-        # fig.savefig(f"logs/ep_{epoch}_A->B->A.png")
-        # plt.close('all')
-
-        # fig, ax = plt.subplots(3, 1, figsize=(10, 10))
-
-        # ax[0].imshow(np.transpose(vutils.make_grid((batch_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
-        # ax[0].set_title("Real Image")
+        fig, ax = plt.subplots(3, 1, figsize=(10, 10))
+        ax[0].imshow(np.transpose(vutils.make_grid((batch_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[0].set_title("Real Image")
         # ax[0].axis('off')
-        # ax[1].imshow(np.transpose(vutils.make_grid((fake_a_test[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        # ax[1].set_title("Fake Image")
+        ax[1].imshow(np.transpose(vutils.make_grid((fake_a_test[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[1].set_title("Fake Image")
         # ax[1].axis('off')
-        # ax[2].imshow(np.transpose(vutils.make_grid((real_b_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
-        # ax[2].set_title("Inversed Image")
+        ax[2].imshow(np.transpose(vutils.make_grid((real_b_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[2].set_title("Inversed Image")
         # ax[2].axis('off')
+        plt.tight_layout()
+        fig.savefig(f"logs/ep_{epoch}_B->A->B_eval.png")
+        plt.close('all')
 
-        # plt.tight_layout()
+    Gan_A2B.train()
+    Gan_B2A.train()
 
-        # fig.savefig(f"logs/ep_{epoch}_B->A->B.png")
-        # plt.close('all')
+    with torch.no_grad():
+        batch_a_test, batch_a_test_x2, batch_a_test_x4 = [g.to(device) for g in next(iter(genA))]
+        fake_b_test, fake_b_test_x2, fake_b_test_x4 = Gan_A2B(batch_a_test)
+        real_a_inv, real_a_inv_x2, real_a_inv_x4 = [b.cpu() for b in Gan_B2A(fake_b_test)]
+        fake_b_test = fake_b_test.cpu()
+        fake_b_test_x2 = fake_b_test_x2.cpu()
+        batch_a_test = batch_a_test.cpu()
+        batch_a_test_x2 = batch_a_test_x2.cpu()
+
+        batch_b_test = next(iter(genB))[0].to(device)
+        fake_a_test = Gan_B2A(batch_b_test)[0]
+        real_b_inv = Gan_A2B(fake_a_test)[0].cpu()
+        fake_a_test = fake_a_test.cpu()
+        batch_b_test = batch_b_test.cpu()
+
+        fig, ax = plt.subplots(3, 1, figsize=(10, 10))
+        ax[0].imshow(np.transpose(vutils.make_grid((batch_a_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[0].set_title("Real Image")
+        # ax[0].axis('off')
+        ax[1].imshow(np.transpose(vutils.make_grid((fake_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[1].set_title("Fake Image")
+        # ax[1].axis('off')
+        ax[2].imshow(np.transpose(vutils.make_grid((real_a_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[2].set_title("Inversed Image")
+        # ax[2].axis('off')
+        plt.tight_layout()
+        fig.savefig(f"logs/ep_{epoch}_A->B->A_train.png")
+        plt.close('all')
+
+        fig, ax = plt.subplots(3, 1, figsize=(10, 10))
+        ax[0].imshow(np.transpose(vutils.make_grid((batch_b_test[:4]+1)/2, padding=0, normalize=True),(1,2,0)))
+        ax[0].set_title("Real Image")
+        # ax[0].axis('off')
+        ax[1].imshow(np.transpose(vutils.make_grid((fake_a_test[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[1].set_title("Fake Image")
+        # ax[1].axis('off')
+        ax[2].imshow(np.transpose(vutils.make_grid((real_b_inv[:4]+1)/2, padding=2, normalize=True),(1,2,0)))
+        ax[2].set_title("Inversed Image")
+        # ax[2].axis('off')
+        plt.tight_layout()
+        fig.savefig(f"logs/ep_{epoch}_B->A->B_train.png")
+        plt.close('all')
 
 
 # def save_models(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, D_A_x4, D_B_x4, name):
@@ -139,17 +175,29 @@ def save_images_test(genA, genB, Gan_A2B, Gan_B2A, epoch, device):
 #     torch.save(D_B_x4, "weights/"+name+"_D_B_x4.pt")
 
 
-def save_models(G_A2B, G_B2A, D_A, D_B, name):
-    torch.save(G_A2B.module.state_dict(), f"weights/{name}_G_A2B.pth")
-    torch.save(G_B2A.module.state_dict(), f"weights/{name}_G_B2A.pth")
-    torch.save(D_A.module.state_dict(), f"weights/{name}_D_A2B.pth")
-    torch.save(D_B.module.state_dict(), f"weights/{name}_D_B2A.pth")
+def save_models(name, G_A2B, G_B2A, D_A, D_B, D_A_x2=None, D_B_x2=None, D_A_x4=None, D_B_x4=None):
+    # torch.save(G_A2B.module.cpu().state_dict(), f"weights/{name}_G_A2B.pth")
+    # torch.save(G_B2A.module.cpu().state_dict(), f"weights/{name}_G_B2A.pth")
+    # torch.save(D_A.module.cpu().state_dict(), f"weights/{name}_D_A2B.pth")
+    # torch.save(D_B.module.cpu().state_dict(), f"weights/{name}_D_B2A.pth")
+
+    torch.save(G_A2B.state_dict(), f"weights/{name}_G_A2B.pth")
+    torch.save(G_B2A.state_dict(), f"weights/{name}_G_B2A.pth")
+    torch.save(D_A.state_dict(), f"weights/{name}_D_A2B.pth")
+    torch.save(D_B.state_dict(), f"weights/{name}_D_B2A.pth")
+    if (D_A_x2 is not None) and (D_B_x2 is not None):
+        torch.save(D_A_x2.state_dict(), f"weights/{name}_D_A2B_x2.pth")
+        torch.save(D_B_x2.state_dict(), f"weights/{name}_D_B2A_x2.pth")
+    if (D_A_x4 is not None) and (D_B_x4 is not None):
+        torch.save(D_A_x4.state_dict(), f"weights/{name}_D_A2B_x4.pth")
+        torch.save(D_B_x4.state_dict(), f"weights/{name}_D_B2A_x4.pth")
 
 
-
-def load_models(name):
-    G_A2B = torch.load("weights/"+name+"_G_A2B.pt")
-    G_B2A = torch.load("weights/"+name+"_G_B2A.pt")
-    D_A = torch.load("weights/"+name+"_D_A.pt")
-    D_B = torch.load("weights/"+name+"_D_B.pt")
-    return G_A2B, G_B2A, D_A, D_B
+def load_weights(G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2, name):
+    G_A2B.load_state_dict(torch.load("weights/"+name+"_G_A2B.pth"))
+    G_B2A.load_state_dict(torch.load("weights/"+name+"_G_B2A.pth"))
+    D_A.load_state_dict(torch.load("weights/"+name+"_D_A2B.pth"))
+    D_B.load_state_dict(torch.load("weights/"+name+"_D_B2A.pth"))
+    D_A_x2.load_state_dict(torch.load("weights/"+name+"_D_A2B_x2.pth"))
+    D_B_x2.load_state_dict(torch.load("weights/"+name+"_D_B2A_x2.pth"))
+    return G_A2B, G_B2A, D_A, D_B, D_A_x2, D_B_x2
